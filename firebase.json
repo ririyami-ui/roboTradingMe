@@ -1,0 +1,55 @@
+{
+    "hosting": {
+        "public": "dist",
+        "ignore": [
+            "firebase.json",
+            "**/.*",
+            "**/node_modules/**"
+        ],
+        "rewrites": [
+            {
+                "source": "/api-indodax-tapi/**",
+                "function": "apiIndodaxTapi"
+            },
+            {
+                "source": "/api-indodax-public/**",
+                "function": "apiIndodaxPublic"
+            },
+            {
+                "source": "/api-coingecko/**",
+                "function": "apiCoingecko"
+            },
+            {
+                "source": "/api-cryptocompare/**",
+                "function": "apiCryptocompare"
+            },
+            {
+                "source": "**",
+                "destination": "/index.html"
+            }
+        ],
+        "headers": [
+            {
+                "source": "/sw.js",
+                "headers": [
+                    {
+                        "key": "Cache-Control",
+                        "value": "no-cache"
+                    }
+                ]
+            },
+            {
+                "source": "**/*.@(js|css|png|jpg|gif|svg|webmanifest)",
+                "headers": [
+                    {
+                        "key": "Cache-Control",
+                        "value": "max-age=31536000"
+                    }
+                ]
+            }
+        ]
+    },
+    "functions": {
+        "source": "functions"
+    }
+}
