@@ -7,6 +7,7 @@ import {
   persistentLocalCache,
   persistentMultipleTabManager
 } from "firebase/firestore";
+import { getMessaging } from "firebase/messaging";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAqFIdy9vP4eCI2-5427k4ZBngct1BMod8",
@@ -26,3 +27,6 @@ export const db = initializeFirestore(app, {
     tabManager: persistentMultipleTabManager()
   })
 });
+
+// Initialize FCM
+export const messaging = typeof window !== "undefined" ? getMessaging(app) : null;

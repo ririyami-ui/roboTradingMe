@@ -1,11 +1,11 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, memo } from 'react';
 import { createChart } from 'lightweight-charts';
 
 /**
  * Komponen untuk menampilkan grafik candlestick menggunakan Lightweight Charts.
  * @param {{ohlcData: Array, signals: Array, loading: boolean, ema12: Array, ema26: Array, sma7: Array, sma30: Array, rsi: Array}} props
  */
-export default function CandlestickChart({ ohlcData, signals, loading, ema12, ema26, sma7, sma30, rsi }) {
+const CandlestickChart = ({ ohlcData, signals, loading, ema12, ema26, sma7, sma30, rsi }) => {
   const chartContainerRef = useRef();
 
   useEffect(() => {
@@ -115,4 +115,20 @@ export default function CandlestickChart({ ohlcData, signals, loading, ema12, em
   // The container div will be styled by the parent (App.jsx)
   // We add a key to force re-mount when ohlcData changes, which is a clean way to handle chart re-creation
   return <div ref={chartContainerRef} className="w-full h-full" />;
-}
+};
+
+// [FIX] Menggunakan React.memo agar komponen grafik (yang sgt berat) tidak di-render ulang
+// secara serampangan kecuali data memanjang/berubah panjangnya atau ada sinyal baru.
+export default memo(CandlestickChart, (prevProps, nextProps) => {
+  // Hanya re-render jika status loading berubah
+  if (prevProps.loading !== nextProps.loading) return false;
+  
+  // Hanya re-render jika jumlah lilin (candle) berubah
+  if (prevProps.ohlcData?.length !== nextProps.ohlcData?.length) return false;
+  
+  // Hanya re-render jika ada sinyal (BUY/SELL) baru yg masuk
+  if (prevProps.signals?.length !== nextProps.signals?.length) return false;
+  
+  // Jika panjang array sama persis, anggap tidak perlu re-kalkulasi chart mahal ini
+  return true; 
+});

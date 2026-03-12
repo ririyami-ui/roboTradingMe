@@ -57,14 +57,18 @@ export default function MarketMovers({ onCoinSelect }) {
 
     return (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <div className="bg-gray-800 rounded-xl shadow-md p-5">
-                <h2 className="text-xl font-semibold text-white mb-4 border-b border-gray-700 pb-2">🚀 Indodax Top 5 Gainers (24h)</h2>
+            <div className="bg-gray-800 rounded-xl shadow-md p-5 border border-gray-700/50">
+                <h2 className="text-xl font-semibold text-white mb-4 border-b border-gray-700 pb-2 flex items-center gap-2">
+                    <span className="text-green-400">🚀</span> Top 5 Keuntungan (24h)
+                </h2>
                 {loading ? <Skeleton /> : topGainers.map(coin => (
                     <MarketMoverItem key={coin.id} coin={coin} onCoinSelect={onCoinSelect} />
                 ))}
             </div>
-            <div className="bg-gray-800 rounded-xl shadow-md p-5">
-                <h2 className="text-xl font-semibold text-white mb-4 border-b border-gray-700 pb-2">📉 Indodax Top 5 Losers (24h)</h2>
+            <div className="bg-gray-800 rounded-xl shadow-md p-5 border border-gray-700/50">
+                <h2 className="text-xl font-semibold text-white mb-4 border-b border-gray-700 pb-2 flex items-center gap-2">
+                    <span className="text-red-400">📉</span> Top 5 Kerugian (24h)
+                </h2>
                 {loading ? <Skeleton /> : topLosers.map(coin => (
                     <MarketMoverItem key={coin.id} coin={coin} onCoinSelect={onCoinSelect} />
                 ))}

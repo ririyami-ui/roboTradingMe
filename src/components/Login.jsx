@@ -15,7 +15,7 @@ const Login = ({ onLogin }) => {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                         </svg>
                     </div>
-                    <h1 className="text-3xl font-bold text-white tracking-tight">Crypto<span className="text-cyan-400">Analyst</span></h1>
+                    <h1 className="text-3xl font-bold text-white tracking-tight">SaktiBot<span className="text-cyan-400">Trade</span></h1>
                     <p className="text-gray-400 mt-2">Precision Scalping & Portfolio Management</p>
                 </div>
 

@@ -20,13 +20,31 @@ export const useIndodaxAuth = () => {
     // Sinkronkan state lokal saat cloud settings dimuat
     useEffect(() => {
         if (cloudSettings.isLoaded) {
-            setLocalKeys({
-                apiKey: cloudSettings.apiKey,
-                secretKey: cloudSettings.secretKey,
-                geminiKey: cloudSettings.geminiKey
-            });
+            // Jika kita punya data di Cloud, prioritas Cloud
+            if (cloudSettings.apiKey || cloudSettings.secretKey) {
+                setLocalKeys({
+                    apiKey: cloudSettings.apiKey,
+                    secretKey: cloudSettings.secretKey,
+                    geminiKey: cloudSettings.geminiKey
+                });
+            } else {
+                // Jika Cloud kosong tapi kita punya localStorage, mungkin ini user baru
+                // atau perangkat baru yang belum sinkron. 
+                // Kita coba ambil dari localStorage sebagai fallback awal.
+                const storedApiKey = localStorage.getItem('indodax_api_key');
+                const storedSecretKey = localStorage.getItem('indodax_secret_key');
+                const storedGeminiKey = localStorage.getItem('gemini_api_key');
+
+                if (storedApiKey || storedSecretKey) {
+                    setLocalKeys({
+                        apiKey: storedApiKey || '',
+                        secretKey: storedSecretKey || '',
+                        geminiKey: storedGeminiKey || ''
+                    });
+                }
+            }
         } else {
-            // Fallback ke localStorage jika belum login/belum sinkron
+            // Belum loaded (sedang fetching), gunakan localStorage dulu agar UI tidak kosong
             const storedApiKey = localStorage.getItem('indodax_api_key');
             const storedSecretKey = localStorage.getItem('indodax_secret_key');
             const storedGeminiKey = localStorage.getItem('gemini_api_key');

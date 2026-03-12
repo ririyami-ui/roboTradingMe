@@ -44,20 +44,21 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      strategies: 'injectManifest',
+      srcDir: 'src',
+      filename: 'sw.js',
       registerType: 'autoUpdate',
       includeAssets: ['pwa-192x192.png', 'pwa-512x512.png', 'apple-touch-icon.png'],
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}']
-      },
       manifest: {
-        name: 'Crypto Signal Analyzer',
-        short_name: 'CryptoAnalyzer',
-        description: 'A web application for analyzing cryptocurrency signals and trends.',
+        name: 'SaktiBot Trade',
+        short_name: 'SaktiBot',
+        description: 'SaktiBot Trade: Advanced AI-Powered Crypto Trading Assistant.',
         theme_color: '#111827',
         background_color: '#1f2937',
         display: 'standalone',
         scope: '/',
         start_url: '/',
+        gcm_sender_id: "1039538002307",
         icons: [
           {
             src: 'pwa-192x192.png',
@@ -79,4 +80,27 @@ export default defineConfig({
       }
     })
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) {
+              return 'vendor-react';
+            }
+            if (id.includes('@supabase')) {
+              return 'vendor-supabase';
+            }
+            if (id.includes('@google/generative-ai')) {
+              return 'vendor-ai';
+            }
+            if (id.includes('lightweight-charts')) {
+              return 'vendor-charts';
+            }
+            return 'vendor-others';
+          }
+        }
+      }
+    }
+  }
 })

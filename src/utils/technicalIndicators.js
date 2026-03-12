@@ -175,31 +175,61 @@ export const analyzeTechnicalIndicators = (prices, returnFullData = false) => {
     }
 
     /**
-     * STRATEGI KONSERVATIF (ANTI STOP-LOSS):
-     * 1. RSI < 35 (Kondisi Jenuh Jual yang Kuat)
-     * 2. Harga tepat di Lower Bollinger Band (Toleransi 0.5%)
-     * 3. MACD Momentum mulai naik dari dasar
+     * STRATEGI KONSERVATIF v3 (ANTI STOP-LOSS - MAX STABILITY):
+     * STRONG_BUY: 4 konfirmasi (RSI oversold + BB Bottom + MACD recovering + Trend Stability)
+     * POTENTIAL_BUY: RSI < 32 + EMA cross + Not Overextended
      */
-    const isRsiBuy = latestRsi < 35;
-    const isPriceAtBottom = latestPrice <= lowerBB * 1.005; // toleransi diperketat ke 0.5% agar masuk di dasar
-    const isMacdRecovering = latestHist > prevHist || latestHist > 0;
 
-    if (isRsiBuy && isPriceAtBottom && isMacdRecovering) {
+    // --- FILTER TREN JANGKA PANJANG (50 Candles) ---
+    const sma50 = calculateSMA(prices, 50);
+    const latestSma50 = sma50[sma50.length - 1];
+    const prevSma50 = sma50[sma50.length - 10]; // Cek 10 bar lalu
+    const isMajorTrendDown = latestSma50 && prevSma50 && latestPrice < latestSma50 && latestSma50 < prevSma50;
+    
+    // --- FILTER VOLATILITAS EKSTRIM ---
+    const twentyCandlesAgo = prices[prices.length - 20];
+    const volatility20 = Math.abs((latestPrice - twentyCandlesAgo) / twentyCandlesAgo * 100);
+    const isStableEnough = volatility20 < 2.5; // [RELAXED] 1.8 -> 2.5 untuk menangkap momentum
+
+    // --- STRONG BUY: Melonggarkan sedikit ---
+    const isRsiBuy = latestRsi < 30; // [RELAXED] 28 -> 30
+    const isPriceAtBottom = latestPrice <= lowerBB * 1.001; // [RELAXED] 0.05% -> 0.1%
+    const isMacdRecovering = latestHist !== null && prevHist !== null && latestHist > prevHist && latestHist < 0; 
+
+    if (isRsiBuy && isPriceAtBottom && isMacdRecovering && isStableEnough && !isMajorTrendDown) {
         return 'STRONG_BUY';
     }
 
-    // Sinyal Dasar (Lapis 1) lebih longgar
-    if (latestRsi < 50 || (prevEma12 <= prevEma26 && latestEma12 > latestEma26)) {
+    // --- POTENTIAL BUY: Melonggarkan sedikit ---
+    const isRealGoldenCross = latestEma12 > latestEma26; 
+    const isRsiOversold = latestRsi < 35; // [RELAXED] 32 -> 35
+    const middleBB = bbData.middle[bbData.middle.length - 1];
+    const isNotOverextended = latestPrice < middleBB * 0.995; // [RELAXED] 1.5% -> 0.5% dibawah middle BB
+
+    if (isRsiOversold && isRealGoldenCross && isNotOverextended && isStableEnough && !isMajorTrendDown) {
         return 'POTENTIAL_BUY';
     }
 
-    // JUAL: RSI > 70 atau Harga tembus Upper BB
-    if (latestRsi > 70 || latestPrice >= upperBB * 0.995) {
+    // --- MOMENTUM BREAKOUT: Khusus untuk menangkap lonjakan pasar (Breakout) ---
+    // Di sini kita sengaja melepas filter Volatilitas dan Major Trend Down 
+    // karena momentum seringkali datang dengan volatilitas tinggi dan berlawanan tren lama.
+    const isHealthyMomentum = latestRsi > 45 && latestRsi < 68; // [RELAXED] 48-65 -> 45-68
+    const isBullishCross = latestEma12 > latestEma26;
+    const isMacdPushing = latestHist > 0 && latestHist > prevHist;
+    const isAboveEma50 = latestSma50 && latestPrice > latestSma50 * 0.995; // Toleransi 0.5% di bawah EMA50
+
+    if (isHealthyMomentum && isBullishCross && isMacdPushing && isAboveEma50) {
+        return 'MOMENTUM_UP';
+    }
+
+    // --- SELL: RSI Overbought atau harga menembus Upper BB ---
+    if (latestRsi > 65 || latestPrice >= upperBB * 0.998) { // [FIX] RSI Sell: 68 -> 65
         return 'POTENTIAL_SELL';
     }
 
+    // --- SELL: Dead cross EMA (EMA12 memotong ke bawah EMA26) ---
     if (prevEma12 >= prevEma26 && latestEma12 < latestEma26) {
-        return 'POTENTIAL_SELL';
+        return 'STRONG_SELL';
     }
 
     return 'HOLD';

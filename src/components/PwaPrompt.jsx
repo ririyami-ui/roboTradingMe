@@ -90,7 +90,7 @@ function PwaPrompt() {
           </div>
           <div className="flex-1">
             <h3 className="font-bold text-lg leading-tight">Pasang Aplikasi</h3>
-            <p className="text-sm text-gray-400">Akses Crypto Analyst langsung dari layar utama Anda.</p>
+            <p className="text-sm text-gray-400">Akses SaktiBot Trade langsung dari layar utama Anda.</p>
           </div>
         </div>
         <div className="flex gap-2 justify-end mt-2">
