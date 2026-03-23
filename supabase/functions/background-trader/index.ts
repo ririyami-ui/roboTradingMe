@@ -278,43 +278,78 @@ serve(async (req: Request) => {
     }
 
     try {
-        // 1. Get all users who have background analysis enabled
+        // 1. Get all active profiles (global bot active must be true)
         const { data: activeProfiles, error: profileError } = await supabase
             .from('profiles')
             .select('*')
-            .eq('is_background_bot_enabled', true);
+            .eq('is_bot_active', true);
 
         if (profileError) throw profileError;
         if (!activeProfiles || activeProfiles.length === 0) {
-            return new Response(JSON.stringify({ success: true, message: 'No active analysis profiles' }), { 
+            return new Response(JSON.stringify({ success: true, message: 'No active bot profiles (Bot is OFF)' }), { 
                 headers: { ...corsHeaders, "Content-Type": "application/json" } 
             });
         }
 
         const results = [];
+        const now = Date.now();
 
         for (const profile of activeProfiles) {
             const user_id = profile.id;
+            
+            // [NEW] Hybrid Check: Jika frontend baru saja aktif (< 1 menit), biarkan frontend yang menscan.
+            if (profile.last_active_at) {
+                const lastSeen = new Date(profile.last_active_at).getTime();
+                if (now - lastSeen < 60000) {
+                    console.log(`[HYBRID] Skipping user ${user_id.substring(0,8)}: Frontend is currently active.`);
+                    continue;
+                }
+            }
+            
+            console.log(`[HYBRID] Taking over for user ${user_id.substring(0,8)}: Frontend is offline.`);
+            
             const apiKey = decryptData(profile.api_key, user_id);
             const secretKey = decryptData(profile.secret_key, user_id);
             const fcmToken = profile.fcm_token; // The new push token
 
-            // 2. Fetch coins this user wants analyzed 24/7
+            // 2. Fetch all data needed for this user's traders
             const [{ data: userConfigs }, { data: activeOpenPos }] = await Promise.all([
                 supabase.from('bot_configs').select('*').eq('user_id', user_id),
                 supabase.from('active_trades').select('*').eq('user_id', user_id)
             ]);
 
-            if (!userConfigs || userConfigs.length === 0) continue;
+            // Track what we've processed to avoid duplicate analysis
+            const processedCoins = new Set();
 
-            const configsToProcess = userConfigs;
+            // --- A. PROCESS ACTIVE TRADES (Safeguard Priority) ---
+            if (activeOpenPos && activeOpenPos.length > 0) {
+                console.log(`[SAFEGUARD] User ${user_id.substring(0,8)} has ${activeOpenPos.length} active positions.`);
+                for (const activePos of activeOpenPos) {
+                    const coin_id = activePos.coin_id;
+                    processedCoins.add(coin_id);
+                    
+                    try {
+                        // Improved symbol mapping
+                        let base = '', target = 'IDR';
+                        if (coin_id.includes('-')) {
+                            [base, target] = coin_id.toUpperCase().split('-');
+                        } else if (coin_id.includes('_')) {
+                            [base, target] = coin_id.toUpperCase().split('_');
+                        } else {
+                            base = coin_id.toUpperCase();
+                        }
+                        
+                        // Handle common overrides in backend too
+                        const overrides: Record<string, string> = {
+                            'POLYGON-ECOSYSTEM-TOKEN': 'POL',
+                            'AVALANCHE-2': 'AVAX',
+                            'SHIBA-INU': 'SHIB',
+                            'INDODAX-TOKEN': 'IDT',
+                            'POLYGON': 'POL'
+                        };
+                        const cleanBase = overrides[base] || base;
+                        const symbol = cleanBase + target;
 
-            // 3. Process each config (Oracle Analysis + Safeguard Check)
-            await Promise.all(configsToProcess.map(async (config: any) => {
-                const coin_id = config.coin_id;
-                try {
-                    const [base, target] = coin_id.toUpperCase().split('-');
-                    const symbol = target ? base + target : base + 'IDR';
 
                     // 4. Fetch price history (15m TF)
                     const to = Math.floor(Date.now() / 1000);
@@ -367,36 +402,35 @@ serve(async (req: Request) => {
                     if (isMacdBullish && rsiVal < 65) signal = 'BUY';
                     else if (isMacdBearish || rsiVal > 75) signal = 'SELL';
 
-                    // 7. POSITION SAFEGUARD CHECK (Offline TP / Hard SL / Trailing SL)
-                    const activePos = activeOpenPos?.find((p: any) => p.coin_id === coin_id);
-                    if (activePos) {
-                        let hitReason = '';
-                        let shouldUpdateHighestPrice = false;
-                        const currentHighest = activePos.highest_price || activePos.buy_price;
+                    // 7. POSITION SAFEGUARD EXECUTION (Offline TP / Hard SL / Trailing SL)
+                    let hitReason = '';
+                    let shouldUpdateHighestPrice = false;
+                    const currentHighest = activePos.highest_price || activePos.buy_price;
 
-                        // a. Update Highest Price for Trailing SL
-                        if (latestPrice > currentHighest) {
-                            shouldUpdateHighestPrice = true;
-                        }
+                    // a. Update Highest Price for Trailing SL
+                    if (latestPrice > currentHighest) {
+                        shouldUpdateHighestPrice = true;
+                    }
 
-                        // b. Trailing Stop Loss Logic (Default 3% drop from peak)
-                        const trailingPercent = 3.0;
-                        const dynamicSL = (shouldUpdateHighestPrice ? latestPrice : currentHighest) * (1 - (trailingPercent / 100));
+                    // b. Trailing Stop Loss Logic (Default 3% drop from peak)
+                    const trailingPercent = 3.0;
+                    const dynamicSL = (shouldUpdateHighestPrice ? latestPrice : currentHighest) * (1 - (trailingPercent / 100));
 
-                        // Trailing SL hits if price drops below dynamic SL AND we are in profit zone (at least 1% up)
-                        const isTrailingHit = latestPrice <= dynamicSL && currentHighest > (activePos.buy_price * 1.01);
+                    // Trailing SL hits if price drops below dynamic SL AND we are in profit zone (at least 1% up)
+                    const isTrailingHit = latestPrice <= dynamicSL && currentHighest > (activePos.buy_price * 1.01);
 
-                        if (latestPrice >= activePos.target_tp) hitReason = 'profit';
-                        else if (latestPrice <= activePos.target_sl) hitReason = 'loss';
-                        else if (isTrailingHit) hitReason = 'trailing_sl';
+                    if (latestPrice >= activePos.target_tp) hitReason = 'profit';
+                    else if (latestPrice <= activePos.target_sl) hitReason = 'loss';
+                    else if (isTrailingHit) hitReason = 'trailing_sl';
 
-                        if (hitReason) {
-                            try {
-                                const isSim = activePos.is_simulation === true;
-                                const pnl = (((latestPrice - activePos.buy_price) / activePos.buy_price) * 100).toFixed(2);
+                    if (hitReason) {
+                        try {
+                            const isSim = activePos.is_simulation === true;
+                            const pnl = (((latestPrice - activePos.buy_price) / activePos.buy_price) * 100).toFixed(2);
 
-                                if (!isSim && apiKey && secretKey) {
-                                    const pair = coin_id.toLowerCase().replace('-', '_');
+                            if (!isSim && apiKey && secretKey) {
+                                const pair = cleanBase.toLowerCase() + '_' + target.toLowerCase();
+
 
                                     // [FIX 1] Attempt to Cancel Any Existing Stop Loss Orders first to release frozen balance
                                     try {
@@ -426,7 +460,9 @@ serve(async (req: Request) => {
                                         type: 'sell',
                                         price: latestPrice,
                                     };
-                                    sellParams[base.toLowerCase()] = activePos.quantity; // Indodax reqs 'btc', 'eth', etc as the amount key
+                                    // Use proper base token for Indodax API (e.g. 'btc' key for quantity)
+                                    sellParams[cleanBase.toLowerCase()] = activePos.quantity; 
+
 
                                     await privateApiRequest('trade', apiKey, secretKey, sellParams);
                                 }
@@ -457,42 +493,123 @@ serve(async (req: Request) => {
                                 .update({ highest_price: latestPrice, updated_at: new Date().toISOString() })
                                 .eq('id', activePos.id);
                         }
+                    } catch (e: any) {
+                        console.error(`[Safeguard Error] ${coin_id}:`, e.message);
                     }
-
-                    // 8. Log Oracle signals
-                    if (signal !== 'HOLD' && signal !== config.last_signal) {
-                        const oracleMsg = `[ORACLE] ${signal} hint on ${base}/${target}. Market is ${sentiment}. Recommendation: ${advice}`;
-                        await supabase.from('bot_logs').insert({
-                            user_id,
-                            message: oracleMsg,
-                            type: signal.toLowerCase()
-                        });
-
-                        // Dispatch FCM Push Alert for Trade Opportunities
-                        if (fcmToken && FIREBASE_SERVICE_ACCOUNT) {
-                            const notifTitle = `SaktiBot Oracle: ${signal} ${base}/${target}`;
-                            await sendPushNotification(fcmToken, notifTitle, oracleMsg, FIREBASE_SERVICE_ACCOUNT, FIREBASE_PROJECT_ID);
-                        }
-                    }
-
-                    // 9. Update database with fresh Oracle insights
-                    await supabase
-                        .from('bot_configs')
-                        .update({
-                            last_signal: signal,
-                            market_sentiment: sentiment,
-                            advice: advice,
-                            updated_at: new Date().toISOString()
-                        })
-                        .eq('user_id', user_id)
-                        .eq('coin_id', coin_id);
-
-                    results.push({ coin_id, signal, sentiment, advice });
-
-                } catch (e: any) {
-                    console.error(`Error analyzing ${coin_id}:`, e.message);
                 }
-            }));
+            }
+
+            // --- B. PROCESS BOT CONFIGS (Oracle Signals) ---
+            if (userConfigs && userConfigs.length > 0) {
+                await Promise.all(userConfigs.map(async (config: any) => {
+                    const coin_id = config.coin_id;
+                    // Skip if already processed in Safeguard part (to save API calls)
+                    if (processedCoins.has(coin_id)) return; 
+                    
+                    try {
+                        let base = '', target = 'IDR';
+                        if (coin_id.includes('-')) {
+                            [base, target] = coin_id.toUpperCase().split('-');
+                        } else if (coin_id.includes('_')) {
+                            [base, target] = coin_id.toUpperCase().split('_');
+                        } else {
+                            base = coin_id.toUpperCase();
+                        }
+                        
+                        const overrides: Record<string, string> = {
+                            'POLYGON-ECOSYSTEM-TOKEN': 'POL',
+                            'AVALANCHE-2': 'AVAX',
+                            'SHIBA-INU': 'SHIB',
+                            'INDODAX-TOKEN': 'IDT',
+                            'POLYGON': 'POL'
+                        };
+                        const cleanBase = overrides[base] || base;
+                        const symbol = cleanBase + target;
+
+                        // 4. Fetch price history (15m TF)
+                        const to = Math.floor(Date.now() / 1000);
+                        const from = to - (15 * 60 * 300);
+                        const chartRes = await fetch(`https://indodax.com/tradingview/history_v2?symbol=${symbol}&tf=15&from=${from}&to=${to}`);
+                        const chartDataArray = await chartRes.json();
+
+                        if (!chartDataArray || !Array.isArray(chartDataArray) || chartDataArray.length < 50) return;
+
+                        const prices: number[] = chartDataArray.map((d: any) => typeof d.Close === 'string' ? parseFloat(d.Close) : d.Close);
+                        const latestPrice = prices[prices.length - 1];
+
+                        // 5. Technical Analysis (MACD + RSI + Volatility)
+                        const rsiArr = calcRSI(prices, 14);
+                        const rsiVal = rsiArr[rsiArr.length - 1] || 50;
+
+                        const { macdLine, signalLine } = calcMACD(prices);
+                        const currentMacd = macdLine[macdLine.length - 1] || 0;
+                        const currentMacdSignal = signalLine[signalLine.length - 1] || 0;
+                        const prevMacd = macdLine[macdLine.length - 2] || 0;
+                        const prevMacdSignal = signalLine[signalLine.length - 2] || 0;
+
+                        const recentPrices = prices.slice(-10);
+                        const volatilityPercent = ((Math.max(...recentPrices) - Math.min(...recentPrices)) / Math.min(...recentPrices)) * 100;
+
+                        // 6. Market Sentiment & Oracle Advice Logic
+                        let sentiment = 'Active';
+                        let advice = 'Hold';
+                        let signal = 'HOLD';
+
+                        if (rsiVal > 70) {
+                            sentiment = 'Saturated (OB)';
+                            advice = 'Rest (Overbought)';
+                        } else if (rsiVal < 30) {
+                            sentiment = 'Saturated (OS)';
+                            advice = 'Watch (Oversold)';
+                        } else if (volatilityPercent < 0.2) {
+                            sentiment = 'Stagnant';
+                            advice = 'Rest (Low Vol)';
+                        } else {
+                            sentiment = 'Active';
+                            advice = 'Trade';
+                        }
+
+                        const isMacdBullish = prevMacd <= prevMacdSignal && currentMacd > currentMacdSignal;
+                        const isMacdBearish = prevMacd >= prevMacdSignal && currentMacd < currentMacdSignal;
+
+                        if (isMacdBullish && rsiVal < 65) signal = 'BUY';
+                        else if (isMacdBearish || rsiVal > 75) signal = 'SELL';
+
+                        // 8. Log Oracle signals
+                        if (signal !== 'HOLD' && signal !== config.last_signal) {
+                            const oracleMsg = `[ORACLE] ${signal} hint on ${base}/${target}. Market is ${sentiment}. Recommendation: ${advice}`;
+                            await supabase.from('bot_logs').insert({
+                                user_id,
+                                message: oracleMsg,
+                                type: signal.toLowerCase()
+                            });
+
+                            if (fcmToken && FIREBASE_SERVICE_ACCOUNT) {
+                                const notifTitle = `SaktiBot Oracle: ${signal} ${base}/${target}`;
+                                await sendPushNotification(fcmToken, notifTitle, oracleMsg, FIREBASE_SERVICE_ACCOUNT, FIREBASE_PROJECT_ID);
+                            }
+                        }
+
+                        // 9. Update database with fresh Oracle insights
+                        await supabase
+                            .from('bot_configs')
+                            .update({
+                                last_signal: signal,
+                                market_sentiment: sentiment,
+                                advice: advice,
+                                updated_at: new Date().toISOString()
+                            })
+                            .eq('user_id', user_id)
+                            .eq('coin_id', coin_id);
+
+                        results.push({ coin_id, signal, sentiment, advice });
+
+                    } catch (e: any) {
+                        console.error(`Error analyzing ${coin_id}:`, e.message);
+                    }
+                }));
+            }
+
         }
 
         return new Response(JSON.stringify({ success: true, processed: results.length }), { headers: { "Content-Type": "application/json" } })
